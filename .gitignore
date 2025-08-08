@@ -24,3 +24,7 @@ Thumbs.db
 
 # Ignore VS Code settings
 .vscode/
+
+# Ignore local and config folders
+.config/
+.local/

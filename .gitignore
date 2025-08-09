@@ -1,0 +1,35 @@
+# Environment variables
+.env
+
+# Python virtual environment
+bruh/
+venv/
+*.venv/
+env/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE and editor folders
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# PandasAI generated charts and exports
+exports/
+charts/
+
+# Application logs
+logs/*.log
+
+# History files
+*.jsonl
+history.json
+
+# OS generated files
+.DS_Store
+Thumbs.db

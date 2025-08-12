@@ -118,21 +118,6 @@ class QueryProcessor:
     def _get_dataframe_context(self, df: pd.DataFrame) -> str:
         """Create context information about the DataFrame"""
         try:
-            # Analyze column types more thoroughly
-            numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-            text_cols = df.select_dtypes(include=['object']).columns.tolist()
-            datetime_cols = df.select_dtypes(include=['datetime']).columns.tolist()
-            
-            # Identify potential date columns in object columns
-            potential_date_cols = []
-            for col in text_cols:
-                sample_values = df[col].dropna().astype(str).head(3).tolist()
-                if any(self._looks_like_date(val) for val in sample_values):
-                    potential_date_cols.append(col)
-            
-            # Remove potential date columns from text columns for analysis
-            analysis_text_cols = [col for col in text_cols if col not in potential_date_cols]
-            
             context = f"""
 DataFrame Information:
 - Shape: {df.shape[0]} rows × {df.shape[1]} columns
@@ -141,35 +126,12 @@ DataFrame Information:
 - Sample data (first 3 rows):
 {df.head(3).to_string()}
 
-Column Analysis:
-- Numeric columns (use for calculations): {numeric_cols}
-- Text/Categorical columns (use for grouping): {analysis_text_cols}
-- Date columns (avoid in numeric operations): {potential_date_cols + datetime_cols}
-- All object columns: {text_cols}
-
-IMPORTANT: Do NOT include date columns in correlation analysis or numeric operations.
-Use only numeric columns for statistical analysis and price factor analysis.
+Numeric columns: {df.select_dtypes(include=['number']).columns.tolist()}
+Categorical columns: {df.select_dtypes(include=['object', 'category']).columns.tolist()}
 """
             return context
         except Exception as e:
             return f"Error getting DataFrame context: {str(e)}"
-    
-    def _looks_like_date(self, value: str) -> bool:
-        """Check if a string value looks like a date"""
-        if not isinstance(value, str) or len(value) < 6:
-            return False
-        
-        # Common date patterns
-        date_patterns = [
-            r'\d{1,2}-\d{1,2}-\d{4}',  # dd-mm-yyyy or mm-dd-yyyy
-            r'\d{4}-\d{1,2}-\d{1,2}',  # yyyy-mm-dd
-            r'\d{1,2}/\d{1,2}/\d{4}',  # dd/mm/yyyy or mm/dd/yyyy
-            r'\d{4}/\d{1,2}/\d{1,2}',  # yyyy/mm/dd
-            r'\d{1,2}\.\d{1,2}\.\d{4}', # dd.mm.yyyy
-        ]
-        
-        import re
-        return any(re.match(pattern, value.strip()) for pattern in date_patterns)
     
     def _create_prompt(self, df_info: str, query: str) -> str:
         """Create prompt for the LLM"""
@@ -193,10 +155,6 @@ Requirements:
 8. For sorting operations, use df.sort_values() with ascending=False for highest values
 9. For filtering by multiple criteria, use boolean indexing with & operator
 10. Always use .head(n) to limit results when asked for "top N" items
-11. AVOID mixing transform and aggregation operations in the same chain
-11. For factor analysis or correlations, use ONLY numeric columns - exclude date columns
-12. When analyzing factors affecting price, calculate correlations between price and other numeric columns only
-13. For complex queries, break into simple operations or use appropriate pandas methods
 
 Examples:
 - For "show first 5 rows": df.head(5)
@@ -205,29 +163,6 @@ Examples:
 - For "top 5 highest prices": df.nlargest(5, 'price')
 - For "lowest prices": df.nsmallest(5, 'price')
 - For "top 5 with highest rating and lowest price": df.sort_values(['rating', 'price'], ascending=[False, True]).head(5)
-- For "products with highest rating and lowest price": df.loc[df.groupby('category')['rating'].idxmax()]
-- For "best value items": df.assign(value_score=df['rating']/df['price']).nlargest(5, 'value_score')
-- For "mean of each column": df.select_dtypes(include=['number']).mean()
-- For "statistics of each column": df.describe()
-- For "top 4 factors affecting price": df.select_dtypes(include=['number']).corr()['price'].abs().sort_values(ascending=False).head(5)
-- For "correlation with price": df.select_dtypes(include=['number']).corrwith(df['price']).sort_values(ascending=False)
-- For "mean, median, mode of each column": pd.concat([df.select_dtypes(include=['number']).mean().rename('mean'), df.select_dtypes(include=['number']).median().rename('median'), df.select_dtypes(include=['number']).mode().iloc[0].rename('mode')], axis=1)
-
-Statistical Operations:
-- Mean: df.mean() or df['column'].mean()
-- Median: df.median() or df['column'].median()
-- Mode: df.mode() or df['column'].mode().iloc[0]
-- Multiple statistics: df.agg(['mean', 'median', 'std'])
-- Summary statistics: df.describe()
-- For mode, always use .iloc[0] to get the first mode value
-- For multiple stats across columns: pd.concat() or df.agg() with function list
-
-Common Pandas Operations:
-- Sort by multiple columns: df.sort_values(['col1', 'col2'], ascending=[False, True])
-- Filter data: df[df['column'] > value]
-- Group and aggregate: df.groupby('category').agg({{'price': 'mean', 'rating': 'max'}})
-- Find top N per group: df.loc[df.groupby('category')['rating'].nlargest(3).index]
-- Calculate ratios: df.assign(ratio=df['col1']/df['col2'])
 
 Your code:
 """
@@ -351,24 +286,7 @@ Your code:
                 raise Exception(f"Syntax error in generated code: {str(e)}")
         
         except Exception as e:
-            error_msg = str(e)
-            
-            # Handle specific pandas errors with helpful suggestions
-            if "cannot combine transform and aggregation operations" in error_msg:
-                raise Exception(
-                    "Transform/aggregation error: Try breaking the query into simpler steps. "
-                    "For complex queries, use df.assign() for new columns or separate operations."
-                )
-            elif "KeyError" in error_msg and "column" in error_msg.lower():
-                raise Exception(
-                    f"Column not found: {error_msg}. Please check column names in your data."
-                )
-            elif "groupby" in error_msg.lower() and "aggregate" in error_msg.lower():
-                raise Exception(
-                    "GroupBy error: Use proper aggregation functions like .mean(), .sum(), .max() after groupby."
-                )
-            else:
-                raise Exception(f"Error executing code: {error_msg}")
+            raise Exception(f"Error executing code: {str(e)}")
     
     def _validate_result(self, result: Any) -> Any:
         """Validate and format the result"""

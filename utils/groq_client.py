@@ -3,12 +3,17 @@ import requests
 import json
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
+import urllib3
+import certifi
 
 # Load environment variables from .env file
 load_dotenv()
 
+
 class GroqClient:
     """Client for interacting with Groq API using Llama3-70b-8192 model"""
+    
+    _ssl_configured = False  # Class variable to track SSL configuration
     
     def __init__(self):
         self.api_key = os.getenv("GROQ_API_KEY")
@@ -17,8 +22,70 @@ class GroqClient:
         self.max_tokens = 1000
         self.temperature = 0.1  # Low temperature for more consistent code generation
         
+        # Handle SSL certificate issues only once
+        if not GroqClient._ssl_configured:
+            self._setup_ssl_handling()
+            GroqClient._ssl_configured = True
+        
+        # Create a custom session with SSL configuration
+        self.session = self._create_ssl_session()
+        
         if not self.api_key:
             raise ValueError("GROQ_API_KEY environment variable is required")
+    
+    def _create_ssl_session(self):
+        """Create a requests session with proper SSL configuration"""
+        try:
+            session = requests.Session()
+            
+            # Set the certificate bundle
+            session.verify = certifi.where()
+            
+            # Configure SSL adapter with retry logic
+            adapter = requests.adapters.HTTPAdapter(
+                max_retries=requests.packages.urllib3.util.retry.Retry(
+                    total=2,
+                    backoff_factor=0.3,
+                    status_forcelist=[500, 502, 504]
+                )
+            )
+            session.mount('https://', adapter)
+            
+            return session
+            
+        except Exception as e:
+            print(f"Warning: Could not create SSL session: {e}")
+            # Fallback to basic session
+            session = requests.Session()
+            session.verify = False  # Disable SSL verification as last resort
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            return session
+    
+    def _setup_ssl_handling(self):
+        """Setup SSL handling to avoid certificate issues"""
+        # Disable SSL warnings
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
+        # Aggressively fix SSL environment variables
+        ssl_cert_file = os.environ.get('SSL_CERT_FILE', '')
+        
+        # Always remove problematic SSL_CERT_FILE if it points to PostgreSQL
+        if ssl_cert_file and ('PostgreSQL' in ssl_cert_file or not os.path.exists(ssl_cert_file)):
+            print(f"Removing problematic SSL_CERT_FILE: {ssl_cert_file}")
+            if 'SSL_CERT_FILE' in os.environ:
+                del os.environ['SSL_CERT_FILE']
+        
+        # Force set the certificate bundle to certifi's path
+        certifi_path = certifi.where()
+        os.environ['REQUESTS_CA_BUNDLE'] = certifi_path
+        os.environ['SSL_CERT_FILE'] = certifi_path
+        
+        print(f"SSL certificate bundle set to: {certifi_path}")
+        
+        # Also clear other potentially problematic variables
+        for var in ['CURL_CA_BUNDLE', 'SSL_CERT_DIR']:
+            if var in os.environ:
+                del os.environ[var]
     
     def generate_code(self, prompt: str) -> str:
         """
@@ -61,12 +128,24 @@ class GroqClient:
                 "stop": None
             }
             
-            response = requests.post(
-                self.base_url,
-                headers=headers,
-                json=payload,
-                timeout=30
-            )
+            # Use the custom session for the request with error handling
+            try:
+                response = self.session.post(
+                    self.base_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=30
+                )
+            except Exception as session_error:
+                # If session fails, try with basic requests as fallback
+                print(f"Session request failed, trying fallback: {session_error}")
+                response = requests.post(
+                    self.base_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=30,
+                    verify=certifi.where()
+                )
             
             if response.status_code == 200:
                 response_data = response.json()
